@@ -1,0 +1,4 @@
+ver:"3.0"
+depends,func,name,src
+[],M,"toolImportFunc","/*\n  Load `io/tmp/func.zinc` grid. Commit new function records that\n  do not have a duplicate on the project (based on name).\n  \n  Arguments: \n  N/A\n\n  // kW Engineering // RGV // Last Update: 2019-06-26 //\n*/\n\n() => do\n  // Load records\n  fs: try ioReadZinc(`io/tmp/func.zinc`)\n      catch return {error:\"File `io/tmp/func.zinc` not found\"}\n                   .toGrid\n\n  // Commit new function record if no duplicate found\n  fs. each f => do\n    exFunc: read(func and name==f->name, false)\n    if (exFunc==null)\n      commit(diff(null, f, {add}))\n  end\nend\n"
+
