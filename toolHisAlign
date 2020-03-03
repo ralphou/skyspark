@@ -1,0 +1,102 @@
+/*
+  Copyright 2020 Raphael Vitti
+  
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program. If not, see <https://www.gnu.org/licenses/>.
+*/
+/*  
+  Process a history grid to align timestamps of contained histories, for example
+  in preparation for a foldCols. Determine average interval for each history, 
+  then select a target interval for hisRollup. Rollup using given rollupFunc. 
+  Process missing (null) values based on selected option.
+  NA values are propagated. Options for null values:
+  - Show missing values with NA
+  - Remove rows with any missing values
+  If any column / trend is COV with hisMode:"cov" tag, return original
+  grid if minRollup is 0, or apply hisRollup at provided minRollup.
+  
+  Arguments:
+  hisGrid          History grid to process
+  rollupFunc       Func, function used for rollup
+  intervalFunc     Func, (x,y) function used to select rollup interval
+  removeMissing    Bool, if true, remove rows with any null values,
+                   else replace all null values with NA
+  minRollup        Number (time), specify minimum rollup time
+  validIntervals   List of Numbers (time), valid rollup intervals
+
+  // kW Engineering // RGV // Last Update: 2020-01-21 //
+*/
+
+(hisGrid, rollupFunc:avg, intervalFunc:min,
+ removeMissing:true, minRollup:0min,
+ validIntervals:[1s, 2s, 5s, 10s, 15s, 30s,
+                 1min, 2min, 3min, 5min, 10min, 15min, 30min,
+                 1hr, 2hr, 6hr, 12hr, 24hr]) => do
+  // Initialize
+  interval: null
+  covFlag: false
+  minRollup= try minRollup.to("s") catch 0s
+  
+  // Cycle through each column and determine corresponding
+  // average interval
+  hisGrid.removeCol("ts").colNames.each colName => do
+    subHisGrid: hisGrid.keepCols(["ts"].add(colName))
+                       .hisClip
+                       .findAll(row => row[colName] != null)
+    if (subHisGrid.size < 2) return null
+    tsList: subHisGrid.colToList("ts")
+    avgInterval: (tsList[-1] - tsList[0]) / (tsList.size - 1)
+    avgInterval= avgInterval.to("s")
+    // Check metadata for hisMode==cov
+    if (subHisGrid.col(colName).meta["hisMode"]=="cov")
+      covFlag= true
+    // Apply intervalFunc selection function
+    interval= if (interval==null) avgInterval
+              else intervalFunc(interval, avgInterval)
+  end
+  // If minRollup > 0, apply to interval
+  if (minRollup > 0) interval= max(interval, minRollup)
+  
+  // If some histories are COV and minRollup is specified,
+  // simply rollup at minRollup
+  if (covFlag and minRollup > 0)
+    hisGrid= hisGrid.hisRollup(rollupFunc, minRollup)
+  // Else if any history is COV and minRollup isn't specified, or if
+  // no interval was found do not rollup
+  else if (covFlag or interval==null or interval==0)
+    hisGrid= hisGrid
+  // Else select closest valid interval from validIntervals and rollup
+  else do
+    distF: (x,y) => abs(x.to("s") - y.to("s")).as(1)
+    finalInterval: validIntervals
+      .sort((a,b) => distF(a,interval) <=> distF(b,interval))
+      .first
+    
+    // Perform rollup
+    hisGrid= hisGrid.hisRollup(rollupFunc, finalInterval)
+  end
+  
+  // Process missing data
+  if (removeMissing)
+    hisGrid= hisGrid.findAll(row => row.all(v => v != null))
+  else // Show missing values with NA
+    hisGrid= hisGrid.hisMap(v => if (v==null) na() else v)
+
+  return hisGrid
+end
+
+/*
+  Updates
+  2020-01-21  Raphael Vitti
+    Added default rollup of cov series if minRollup is provided.
+*/
